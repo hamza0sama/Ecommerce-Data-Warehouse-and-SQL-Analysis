@@ -207,9 +207,7 @@ cleaned AS (
 
         NULLIF(LTRIM(RTRIM("Product Name")), '') AS "Product Name",
 
-        TRY_CAST(REPLACE(REPLACE(LTRIM(RTRIM("Sales")), CHAR(13), ''), CHAR(10), '')
-        AS DECIMAL(18,2)
-        ) AS "Sales",
+        TRY_CAST(REPLACE(REPLACE(LTRIM(RTRIM("Sales")), CHAR(13), ''), CHAR(10), '')AS DECIMAL(18,2)) AS "Sales",
 
         TRY_CAST(
         REPLACE(REPLACE(LTRIM(RTRIM("Quantity")), CHAR(13), ''), CHAR(10), '')
@@ -243,7 +241,7 @@ iqr_bounds AS (
             WITHIN GROUP (ORDER BY "Sales") OVER () AS q3_sales
         FROM cleaned
         WHERE "Sales" IS NOT NULL
-    ) x
+    ) AS percentile_data
 ),
 
 flagged AS (
@@ -270,7 +268,6 @@ flagged AS (
         c."Discount",
         c."Profit",
 
-        -- Missing Values
         CASE WHEN
                  c."Row ID" IS NULL
               OR c."Order ID" IS NULL
@@ -297,7 +294,6 @@ flagged AS (
             ELSE 0
         END AS has_missing_value,
 
-        -- Invalid Values
          CASE
             WHEN c."Sales" < 0
               OR c."Quantity" <= 0
@@ -313,7 +309,6 @@ flagged AS (
         END AS has_invalid_value,
 
 
-        -- Outlier Values using IQR
 CASE
             WHEN c."Sales" IS NOT NULL
              AND (
@@ -402,10 +397,27 @@ FROM silver.encounters
 
 -- GOLD LAYER
 
--- 4 DIM (Customer, Date, Product, Location)
--- 1 Fact (Sales)
+IF OBJECT_ID('gold.FactSales', 'U') IS NOT NULL
+    DROP TABLE gold.FactSales;
+GO
 
--- 1. Drop all Foreign Keys in gold schema
+IF OBJECT_ID('gold.dimCustomer', 'U') IS NOT NULL
+    DROP TABLE gold.dimCustomer;
+GO
+
+IF OBJECT_ID('gold.dimDate', 'U') IS NOT NULL
+    DROP TABLE gold.dimDate;
+GO
+
+IF OBJECT_ID('gold.dimProduct', 'U') IS NOT NULL
+    DROP TABLE gold.dimProduct;
+GO
+
+IF OBJECT_ID('gold.dimLocation', 'U') IS NOT NULL
+    DROP TABLE gold.dimLocation;
+GO
+
+
 CREATE TABLE gold.dimCustomer (
     CustomerKey INT IDENTITY(1,1) PRIMARY KEY,
 
@@ -413,8 +425,7 @@ CREATE TABLE gold.dimCustomer (
     "Customer Name" NVARCHAR(255),
     "Segment" NVARCHAR(255),
 
-    CONSTRAINT UQ_dimCustomer_CustomerID
-        UNIQUE ("Customer ID")
+    CONSTRAINT UQ_dimCustomer_CustomerID UNIQUE ("Customer ID")
 );
 
 GO
@@ -422,11 +433,10 @@ GO
 CREATE TABLE gold.dimDate (
     DateKey INT PRIMARY KEY,
 
-    FullDate DATE NOT NULL,
-
-    DayNumber INT,
+FullDate DATE NOT NULL,
+DayNumber INT,
     MonthNumber INT,
-    MonthName NVARCHAR(20),
+MonthName NVARCHAR(20),
     QuarterNumber INT,
     YearNumber INT,
     DayName NVARCHAR(20),
@@ -436,7 +446,6 @@ GO
 
 CREATE TABLE gold.dimProduct (
     ProductKey INT IDENTITY(1,1) PRIMARY KEY,
-
     "Product ID" NVARCHAR(255) NOT NULL,
     "Category" NVARCHAR(255),
     "Sub Category" NVARCHAR(255),
@@ -450,7 +459,6 @@ GO
 
 CREATE TABLE gold.dimLocation (
     LocationKey INT IDENTITY(1,1) PRIMARY KEY,
-
     "Country" NVARCHAR(255),
     "City" NVARCHAR(255),
     "State" NVARCHAR(255),
@@ -468,7 +476,6 @@ CREATE TABLE gold.FactSales (
     LocationKey INT NOT NULL,
 
     "Ship Mode" NVARCHAR(255),
-
     "Sales" DECIMAL(18,2),
     "Quantity" INT,
     "Discount" DECIMAL(5,2),
@@ -493,7 +500,7 @@ CREATE TABLE gold.FactSales (
 
 
 
--- 1. DIM CUSTOMER
+-- 1 DI CUSTOMER
 
 INSERT INTO gold.dimCustomer
 (
@@ -518,7 +525,7 @@ WHERE has_invalid_value = 0
 
 
 
--- 2. DIM DATE
+-- 2 DIMDATE
 
 INSERT INTO gold.dimDate
 (
@@ -567,7 +574,7 @@ WHERE has_invalid_value = 0
   );
 
 
--- 3. DIM PRODUCT
+-- 3 DIM PROUCT
 
 INSERT INTO gold.dimProduct
 (
@@ -597,11 +604,11 @@ FROM
     FROM silver.encounters
     WHERE has_invalid_value = 0
       AND "Product ID" IS NOT NULL
-) x
+) AS Temp
 WHERE rn = 1;
 
 
--- 4. DIM LOCATION
+-- 4 DIMLOCATION
 
 INSERT INTO gold.dimLocation
 (
@@ -636,7 +643,7 @@ WHERE has_invalid_value = 0
   );
 
 
--- 5. FACT ONLINE SALES
+-- 5 FACT SALES
 
 INSERT INTO gold.FactSales
 (
@@ -708,19 +715,19 @@ WHERE s.has_invalid_value = 0
 
 --============================================================================================
   SELECT *
-  from gold.dimCustomer; --629 row
+  from gold.dimCustomer; --629 rows
 
     SELECT *
-  from gold.dimDate; --720 row
+  from gold.dimDate; --720 rows
 
     SELECT *
-  from gold.dimLocation ;--195 row
+  from gold.dimLocation ;--195 rows
 
     SELECT *
-  from gold.dimProduct; --1,310 row
+  from gold.dimProduct; --1,310 rows
 
     SELECT *
-  from gold.FactSales; --2,323 row
+  from gold.FactSales; --2,323 rows
 
 
 
@@ -796,8 +803,7 @@ HAVING SUM(fs.Sales) > (
 )
 ORDER BY [Total Sales] DESC;
 
--- 6 Which products have the highest profit margin within each category?
-
+-- 6 Which categories have a total profit above the average total profit of all categories?
 
 WITH CategoryProfit AS (
     SELECT dp.Category, SUM(fs.Profit) AS TotalProfit
@@ -871,3 +877,47 @@ SELECT
     TotalSales - PreviousSales AS SalesDifference
 FROM RankedState
 ORDER BY TotalSales DESC;
+
+
+
+-- 9 Which products have the highest profit margin within each category?
+
+WITH TOP_Product As(
+
+SELECT dp.Category , dp.[Product Name],Sum(fs.Profit) AS "Total Profit",Sum(fs.Sales) as "Total Sales", Sum(fs.Profit)/Sum(fs.Sales)  AS[Profit Margin]
+from gold.FactSales as fs
+LEFT JOIN gold.dimProduct as dp
+on fs.ProductKey=dp.ProductKey
+GROUP BY dp.[Product Name],dp.Category
+),
+
+RANK AS(
+    SELECT [Product Name],[Category],[Total Profit],[Total Sales],[Profit Margin],ROW_NUMBER() OVER (
+    PARTITION BY Category
+    ORDER BY [Profit Margin] DESC) AS ROWRANK
+    FROM TOP_Product )
+
+SELECT [Product Name],[Category],[Total Profit],[Total Sales],[Profit Margin]
+    From RANK
+    WHERE ROWRANK =1
+    ORDER BY [Profit Margin] DESC
+
+
+-- 10 Which customer segments have a higher total profit than the average total profit across all customer segments?
+
+
+WITH  Customer_segments AS(
+    SELECT dc.Segment,SUM(fs.Profit) As [Total Profit]
+    FROM gold.FactSales as fs
+    LEFT Join gold.dimCustomer as dc
+    on fs.CustomerKey=dc.CustomerKey 
+    GROUP BY dc.Segment)
+,
+Average_Profit AS(
+    SELECT Segment,[Total Profit], AVG([Total Profit]) OVER () AS AvgProfit
+    from Customer_segments
+
+)
+SELECT *
+FROM Average_Profit
+WHERE [Total Profit] > AvgProfit
