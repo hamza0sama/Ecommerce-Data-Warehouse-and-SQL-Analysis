@@ -1,167 +1,161 @@
 # E-commerce Data Warehouse & SQL Analysis
 
-An end-to-end **E-commerce Data Warehouse** project built using **SQL Server**, covering the complete data pipeline from raw data ingestion and transformation to dimensional modeling and analytical SQL queries.
+An end-to-end data warehouse project built on **SQL Server**, covering the full pipeline from raw CSV ingestion to dimensional modeling and advanced SQL analysis — implemented as a **Staging → Bronze → Silver → Gold** architecture.
 
-## 📌 Project Overview
+## Overview
 
-This project demonstrates how raw e-commerce data can be transformed into a structured **Data Warehouse** using a **Bronze → Silver → Gold** architecture.
+This project transforms raw e-commerce transaction data (Central Superstore dataset) into a clean, query-ready data warehouse. The database, **`Mini_Project_02`**, follows a layered ETL design where each stage progressively cleans, validates, and structures the data, culminating in a **Star Schema** used for business-oriented SQL analysis.
 
-The final Gold layer follows a **Star Schema** design, making the data suitable for analytical reporting and business intelligence.
+## Architecture
 
-The project also includes a set of SQL-based analytical questions to extract insights related to:
-
-- Sales and Profit
-- Products and Categories
-- Customers and Segments
-- States and Locations
-- Product performance
-- Sales rankings and comparisons
-
-## 🏗️ Data Warehouse Architecture
-
-```text
+```
 Raw CSV Data
      │
      ▼
-  Staging
+  Staging  →  raw ingestion via BULK INSERT (all columns as NVARCHAR)
      │
      ▼
-   Bronze
+   Bronze  →  raw data preserved with an identity tracking column
      │
      ▼
-   Silver
+   Silver  →  cleaned, validated, and type-cast data
      │
      ▼
-    Gold
+    Gold   →  Star Schema (4 dimensions + 1 fact table)
      │
-     ├── dimCustomer
-     ├── dimDate
-     ├── dimProduct
-     ├── dimLocation
-     └── FactSales
-          │
-          ▼
-    SQL Analysis
+     ▼
+SQL Analysis
 ```
 
-## ⭐ Star Schema
+## Database Structure
 
-The Gold layer is organized into a Star Schema consisting of:
+```
+Mini_Project_02
+├── staging
+├── bronze
+├── silver
+└── gold
+```
 
-### Fact Table
+Schemas are created automatically if they do not already exist.
 
-- `FactSales`
-  - Sales
-  - Quantity
-  - Discount
-  - Profit
-  - CustomerKey
-  - ProductKey
-  - DateKey
-  - LocationKey
+## ETL Pipeline
 
-### Dimension Tables
-
-- `dimCustomer`
-- `dimDate`
-- `dimProduct`
-- `dimLocation`
-
-## 🔄 ETL Process
-
-### 1. Staging
-
-Raw CSV data is imported into the staging layer using `BULK INSERT`.
+### 1. Staging Layer
+Raw CSV data is loaded into `staging.raw_encounters` using `BULK INSERT`. All columns are initially stored as `NVARCHAR` to preserve the source data before any transformation.
 
 ### 2. Bronze Layer
-
-Raw data is stored while handling duplicate records.
+Data flows into `bronze.encounters`, with an added `bronze_id` identity column for record tracking. Records are inserted from staging using `EXCEPT` to prevent duplicate loads.
 
 ### 3. Silver Layer
+`silver.encounters` holds the cleaned and validated dataset. This layer applies:
 
-Data is cleaned and validated through:
+**Type conversion**
+| Column | Target Type |
+|---|---|
+| Row ID | `INT` |
+| Order Date / Ship Date | `DATETIME2` |
+| Sales / Profit | `DECIMAL(18,2)` |
+| Quantity | `INT` |
+| Discount | `DECIMAL(5,2)` |
 
-- Duplicate removal
-- Data type conversion
-- Null handling
-- Invalid value detection
-- Date validation
+**Cleaning steps**
+- Trimming extraneous whitespace
+- Converting empty strings to `NULL`
+- Type validation via `TRY_CAST`
+- Duplicate detection using `ROW_NUMBER()`
+- Missing and invalid value detection
 - Sales outlier detection using the IQR method
 
-### 4. Gold Layer
+**Data quality flags** stored per record: `has_missing_value`, `has_invalid_value`, `has_outlier_value`
 
-Cleaned data is transformed into dimension and fact tables following a Star Schema.
+**Validation rules** — a record is flagged invalid when:
+- `Sales < 0`
+- `Quantity <= 0`
+- `Discount < 0` or `Discount > 1`
+- `Ship Date < Order Date`
 
-## 📊 SQL Analysis
+**Outlier detection** uses the standard IQR bounds:
+```
+Lower Bound = Q1 − 1.5 × IQR
+Upper Bound = Q3 + 1.5 × IQR
+```
+Outliers are flagged rather than removed, preserving data quality information for downstream analysis.
 
-The project includes analytical queries using:
+### 4. Gold Layer — Star Schema
+Cleaned Silver data is modeled into dimension and fact tables.
 
-- `GROUP BY`
-- `HAVING`
-- Subqueries
-- CTEs
-- Window Functions
-- `ROW_NUMBER()`
-- `LAG()`
-- Aggregations
-- Ranking and comparison techniques
+## Star Schema
 
-Example analytical questions include:
+| Table | Key | Description |
+|---|---|---|
+| `gold.dimCustomer` | `CustomerKey` (surrogate) | Customer ID (unique), Customer Name, Segment |
+| `gold.dimDate` | `DateKey` (`YYYYMMDD`) | Full date, day/month/quarter/year numbers, day name, weekend flag |
+| `gold.dimProduct` | `ProductKey` (surrogate) | Product ID (unique), Category, Sub-Category, Product Name |
+| `gold.dimLocation` | `LocationKey` | Country, City, State, Postal Code, Region |
+| `gold.FactSales` | Row ID + 4 foreign keys | Ship Mode, Sales, Quantity, Discount, Profit |
 
-- Which customer segments have the highest average sales?
-- Which categories have the highest average quantity?
-- Which products have the highest total quantity sold?
-- Which states generate high sales but relatively low profit?
-- Which products generate above-average total sales?
-- Which products have the highest profit margin within each category?
-- What are the top 3 products by sales within each category?
-- What is the sales difference between consecutive states ordered by total sales?
+`FactSales` connects to all four dimensions via foreign keys, with `CustomerKey`, `DateKey`, `ProductKey`, and `LocationKey` as surrogate keys.
 
-## 🛠️ Technologies
+## Gold Layer Row Counts
 
-- **SQL Server**
-- **T-SQL**
-- **SSMS**
-- **CSV**
-- **Data Warehousing**
-- **Star Schema**
-- **ETL / ELT Concepts**
-- **Window Functions**
+| Table | Rows |
+|---|---:|
+| dimCustomer | 629 |
+| dimDate | 720 |
+| dimLocation | 195 |
+| dimProduct | 1,310 |
+| FactSales | 2,323 |
 
-## 📁 Project Structure
+*(Produced by the validation queries included in the SQL scripts.)*
 
-```text
-Ecommerce-Data-Warehouse-SQL/
-│
+## SQL Business Analysis
+
+Ten analytical questions were answered using the Gold layer:
+
+1. Which customer segments have the highest average sales per transaction?
+2. Which categories have the highest average quantity sold?
+3. Which products have the highest total quantity sold?
+4. Which states generated sales above 50,000 but profit below 5,000?
+5. Which products generated more total sales than the average across all products?
+6. Which categories have total profit above the average across all categories?
+7. What are the top 3 products by total sales within each category?
+8. For each state (ordered by total sales), what is the difference from the previous state's total sales?
+9. Which products have the highest profit margin within each category?
+10. Which customer segments have total profit above the average across all segments?
+
+**Techniques used:** `SELECT`, `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY`, `JOIN` / `LEFT JOIN` / `INNER JOIN`, subqueries, CTEs, `ROW_NUMBER()`, `LAG()`, aggregate functions (`SUM`, `AVG`), `PERCENTILE_CONT()`, ranking, `CASE` logic, `TRY_CAST()`, `EXCEPT`.
+
+## Technologies
+
+SQL Server · T-SQL · SSMS · CSV · Data Warehousing · ETL/ELT · Star Schema · Dimensional Modeling · Data Quality Validation · Window Functions · CTEs
+
+## Project Structure
+
+```
+Mini_Project_02/
+├── data/
+│   └── Central_Superstore.csv
 ├── scripts/
 │   ├── staging/
 │   ├── bronze/
 │   ├── silver/
 │   ├── gold/
 │   └── analysis/
-│
-├── data/
-│
 └── README.md
 ```
 
-## 🎯 Key Learning Outcomes
+## Key Learning Outcomes
 
-Through this project, I practiced:
+- Designing a multi-layer SQL Server data warehouse (Staging → Bronze → Silver → Gold)
+- Loading raw CSV data with `BULK INSERT`
+- Cleaning and validating real-world data: duplicates, missing/invalid values, IQR-based outlier detection
+- Designing a Star Schema with surrogate keys and fact-dimension relationships
+- Writing advanced analytical SQL using CTEs, window functions, and ranking logic
+- Answering business-oriented questions on sales, profit, customers, and products
 
-- Designing a SQL Server Data Warehouse
-- Building a layered ETL pipeline
-- Cleaning and validating real-world data
-- Designing a Star Schema
-- Creating Fact and Dimension tables
-- Writing advanced analytical SQL queries
-- Using CTEs and Window Functions
-- Performing business-oriented data analysis
-
-## 👤 Author
+## Author
 
 **Hamza Osama**
-
 Data Analyst | Python & SQL | Power BI
-
 [GitHub](https://github.com/hamza0sama)
